@@ -25,6 +25,7 @@ import { KonvaCanvas } from './KonvaCanvas';
 import { RemoteCursors } from './RemoteCursors';
 import { CollaborationPanel } from '../CollaborationPanel';
 import { useCollaborationStore } from '../../stores/useCollaborationStore';
+import { OnboardingWizard } from '../OnboardingWizard';
 import { Toolbar } from '../Toolbar';
 import { PromptBar } from '../PromptBar';
 import { Loader } from '../Loader';
@@ -252,6 +253,16 @@ export const CanvasView: React.FC<CanvasViewProps> = (props) => {
         [language],
     );
 
+    // Onboarding — show wizard when no API keys configured
+    const [onboardingDismissed, setOnboardingDismissed] = React.useState(
+        () => localStorage.getItem('onboarding.dismissed') === 'true',
+    );
+    const showOnboarding = userApiKeys.length === 0 && !onboardingDismissed;
+    const handleDismissOnboarding = () => {
+        setOnboardingDismissed(true);
+        localStorage.setItem('onboarding.dismissed', 'true');
+    };
+
     // Collaboration
     const collabStore = useCollaborationStore();
     const [isCollabPanelOpen, setCollabPanelOpen] = React.useState(false);
@@ -422,6 +433,12 @@ export const CanvasView: React.FC<CanvasViewProps> = (props) => {
                 isOpen={isCollabPanelOpen}
                 onClose={() => setCollabPanelOpen(false)}
                 isDark={resolvedTheme === 'dark'}
+            />
+            <OnboardingWizard
+                isOpen={showOnboarding}
+                onClose={handleDismissOnboarding}
+                onAddApiKey={handleAddApiKey}
+                resolvedTheme={resolvedTheme}
             />
             {/* Collaborate button - top right */}
             <button

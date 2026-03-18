@@ -16,6 +16,7 @@ import { enhancePromptWithProvider, inferProviderFromModel } from '../services/a
 import { setGeminiRuntimeConfig } from '../services/geminiService';
 import { setBananaRuntimeConfig } from '../services/bananaService';
 import { generateId } from '../utils/id';
+import { saveKeysEncrypted, loadKeysDecrypted, migrateLegacyKeys } from '../utils/keyVault';
 
 const DEFAULT_MODEL_PREFS: ModelPreference = {
     textModel: 'gemini-2.5-pro',
@@ -83,6 +84,7 @@ const normalizeApiKeyEntry = (item: Partial<UserApiKey>): UserApiKey | null => {
     };
 };
 
+/** Sync load for initial state (plain JSON fallback) */
 const loadApiKeys = (): UserApiKey[] => {
     try {
         const raw = localStorage.getItem('userApiKeys.v1');
@@ -93,6 +95,26 @@ const loadApiKeys = (): UserApiKey[] => {
     } catch {
         return [];
     }
+};
+
+/** Persist API keys with AES-GCM encryption */
+const persistApiKeys = (keys: UserApiKey[]) => {
+    // Sync write for immediate availability
+    localStorage.setItem('userApiKeys.v1', JSON.stringify(keys));
+    // Async encrypted write for security
+    saveKeysEncrypted(keys).catch((err) => console.warn('[keyVault] encrypt failed:', err));
+};
+
+/** Async: load encrypted keys + migrate legacy plain keys */
+const initKeyVault = async (): Promise<UserApiKey[]> => {
+    // Migrate legacy plain-text keys to encrypted format
+    await migrateLegacyKeys();
+    // Try loading from encrypted vault
+    const decrypted = await loadKeysDecrypted<UserApiKey[]>();
+    if (decrypted && Array.isArray(decrypted)) {
+        return decrypted.map(normalizeApiKeyEntry).filter((item): item is UserApiKey => !!item);
+    }
+    return [];
 };
 
 const loadModelPreference = (): ModelPreference => {
@@ -263,7 +285,7 @@ export const useAIStore = create<AIState>((set, get) => {
                     : state.userApiKeys;
 
                 const newKeys = [{ ...nextKey, isDefault: shouldSetDefault }, ...withDefault];
-                localStorage.setItem('userApiKeys.v1', JSON.stringify(newKeys));
+                persistApiKeys(newKeys);
                 return {
                     userApiKeys: newKeys,
                     dynamicModelOptions: computeDynamicModelOptions(newKeys),
@@ -275,7 +297,7 @@ export const useAIStore = create<AIState>((set, get) => {
         deleteApiKey: (id) => {
             set((state) => {
                 const newKeys = state.userApiKeys.filter((k) => k.id !== id);
-                localStorage.setItem('userApiKeys.v1', JSON.stringify(newKeys));
+                persistApiKeys(newKeys);
                 return {
                     userApiKeys: newKeys,
                     dynamicModelOptions: computeDynamicModelOptions(newKeys),
@@ -297,7 +319,7 @@ export const useAIStore = create<AIState>((set, get) => {
                         : inferCapabilitiesByProvider(k.provider);
                     return hasCapabilityOverlap(existingCaps, targetCaps) ? { ...k, isDefault: k.id === id } : k;
                 });
-                localStorage.setItem('userApiKeys.v1', JSON.stringify(newKeys));
+                persistApiKeys(newKeys);
                 return { userApiKeys: newKeys };
             });
             get().syncRuntimeConfigs();
@@ -514,3 +536,14 @@ export const useAIStore = create<AIState>((set, get) => {
 
 // Initialize runtime configs on store creation
 useAIStore.getState().syncRuntimeConfigs();
+
+// Async: migrate legacy keys to encrypted vault and reload
+initKeyVault().then((encryptedKeys) => {
+    if (encryptedKeys.length > 0) {
+        useAIStore.setState({
+            userApiKeys: encryptedKeys,
+            dynamicModelOptions: computeDynamicModelOptions(encryptedKeys),
+        });
+        useAIStore.getState().syncRuntimeConfigs();
+    }
+});
