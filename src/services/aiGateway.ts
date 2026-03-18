@@ -1,0 +1,303 @@
+import type { AIProvider, PromptEnhanceRequest, PromptEnhanceResult, UserApiKey } from '../types';
+import { enhancePromptWithGemini, generateImageFromText, validateGeminiApiKey } from './geminiService';
+import { smartFetch } from './proxyClient';
+
+/**
+ * 通用 API Key 验证 — 根据 provider 调用对应的验证逻辑
+ */
+export async function validateApiKey(
+    provider: AIProvider,
+    apiKey: string,
+    baseUrl?: string,
+): Promise<{ ok: boolean; message?: string }> {
+    if (provider === 'google') {
+        return validateGeminiApiKey(apiKey);
+    }
+
+    // OpenAI-compatible: 调用 /models 接口
+    if (provider === 'openai' || provider === 'qwen' || provider === 'custom') {
+        try {
+            const url = (baseUrl || DEFAULT_BASE_URLS[provider]).replace(/\/$/, '');
+            const res = await fetch(`${url}/models`, {
+                method: 'GET',
+                headers: { Authorization: `Bearer ${apiKey}` },
+            });
+            if (res.ok) return { ok: true };
+            const body = await res.json().catch(() => ({}));
+            return { ok: false, message: body?.error?.message || `HTTP ${res.status}` };
+        } catch (err) {
+            return { ok: false, message: err instanceof Error ? err.message : '网络错误' };
+        }
+    }
+
+    // Anthropic: 调用 /messages 会返回 401 如果 key 无效
+    if (provider === 'anthropic') {
+        try {
+            const url = (baseUrl || DEFAULT_BASE_URLS.anthropic).replace(/\/$/, '');
+            const res = await fetch(`${url}/messages`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify({
+                    model: 'claude-3-haiku-20240307',
+                    max_tokens: 1,
+                    messages: [{ role: 'user', content: 'hi' }],
+                }),
+            });
+            if (res.ok || res.status === 200) return { ok: true };
+            if (res.status === 401 || res.status === 403) return { ok: false, message: 'API Key 无效或权限不足' };
+            return { ok: true }; // 其他错误可能是模型不存在，但 key 是对的
+        } catch (err) {
+            return { ok: false, message: err instanceof Error ? err.message : '网络错误' };
+        }
+    }
+
+    // Stability / Banana: 简单格式校验
+    if (apiKey.length < 10) return { ok: false, message: 'API Key 太短' };
+    return { ok: true, message: '已保存（格式校验通过，未做在线验证）' };
+}
+
+const DEFAULT_BASE_URLS: Record<AIProvider, string> = {
+    openai: 'https://api.openai.com/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    google: 'https://generativelanguage.googleapis.com/v1beta/models',
+    stability: 'https://api.stability.ai/v1',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    banana: 'https://api.banana.dev/v1/vision',
+    custom: '',
+};
+
+function getBaseUrl(provider: AIProvider, key?: UserApiKey) {
+    return (key?.baseUrl || DEFAULT_BASE_URLS[provider]).replace(/\/$/, '');
+}
+
+function requireApiKey(provider: AIProvider, key?: UserApiKey) {
+    if (!key?.key) {
+        throw new Error(`No API Key configured for ${provider} . Please add one in settings.`);
+    }
+    return key.key;
+}
+
+function inferPromptModeHint(request: PromptEnhanceRequest) {
+    const modeHintMap: Record<PromptEnhanceRequest['mode'], string> = {
+        smart: 'Do intelligent enhancement with richer cinematic details, composition, and lighting.',
+        style: `Rewrite with strong style intent. Preferred style preset: ${request.stylePreset || 'cinematic'}.`,
+        precise: 'Preserve user intent strictly; only optimize clarity and structure.',
+        translate: 'Translate and optimize prompt for model friendliness while preserving semantics.',
+    };
+
+    return [
+        'You are a professional prompt engineer for image and video generation.',
+        'Return ONLY valid JSON with keys: enhancedPrompt, negativePrompt, suggestions, notes.',
+        'Keep enhancedPrompt concise but vivid. Do not use markdown.',
+        'negativePrompt should be a comma-separated phrase list.',
+        'suggestions should be short keyword phrases.',
+        modeHintMap[request.mode],
+    ].join('\n');
+}
+
+function safeParsePromptResult(raw: string, fallbackPrompt: string): PromptEnhanceResult {
+    const clean = raw
+        .replace(/^```json\s*/i, '')
+        .replace(/^```/i, '')
+        .replace(/```$/i, '')
+        .trim();
+
+    try {
+        const parsed = JSON.parse(clean) as Partial<PromptEnhanceResult>;
+        return {
+            enhancedPrompt: parsed.enhancedPrompt?.trim() || fallbackPrompt,
+            negativePrompt: parsed.negativePrompt?.trim() || '',
+            suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter(Boolean).slice(0, 8) : [],
+            notes: parsed.notes?.trim() || '',
+        };
+    } catch {
+        return {
+            enhancedPrompt: fallbackPrompt,
+            negativePrompt: '',
+            suggestions: [],
+            notes: raw || 'No response content returned by model.',
+        };
+    }
+}
+
+export function inferProviderFromModel(model: string): AIProvider {
+    if (/^(gemini|imagen|veo)/i.test(model)) return 'google';
+    if (/^(dall-e|gpt-image|gpt-4o)/i.test(model)) return 'openai';
+    if (/^claude/i.test(model)) return 'anthropic';
+    if (/^qwen/i.test(model)) return 'qwen';
+    if (/^(sdxl|stable-diffusion)/i.test(model)) return 'stability';
+    if (/^banana/i.test(model)) return 'banana';
+    return 'custom';
+}
+
+async function enhancePromptWithOpenAICompatible(
+    request: PromptEnhanceRequest,
+    model: string,
+    provider: AIProvider,
+    key?: UserApiKey,
+): Promise<PromptEnhanceResult> {
+    const apiKey = requireApiKey(provider, key);
+    const baseUrl = getBaseUrl(provider, key);
+    const response = await smartFetch(provider, `${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+            model,
+            temperature: 0.6,
+            messages: [
+                { role: 'system', content: inferPromptModeHint(request) },
+                { role: 'user', content: request.prompt },
+            ],
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`${provider} LLM request failed (${response.status}): ${text || response.statusText}`);
+    }
+
+    const json = await response.json();
+    const raw = json?.choices?.[0]?.message?.content || '';
+    return safeParsePromptResult(raw, request.prompt);
+}
+
+async function enhancePromptWithAnthropic(
+    request: PromptEnhanceRequest,
+    model: string,
+    key?: UserApiKey,
+): Promise<PromptEnhanceResult> {
+    const apiKey = requireApiKey('anthropic', key);
+    const baseUrl = getBaseUrl('anthropic', key);
+    const response = await smartFetch('anthropic', `${baseUrl}/messages`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            system: inferPromptModeHint(request),
+            messages: [{ role: 'user', content: request.prompt }],
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Anthropic request failed (${response.status}): ${text || response.statusText}`);
+    }
+
+    const json = await response.json();
+    const raw = Array.isArray(json?.content)
+        ? json.content.map((item: { text?: string }) => item.text || '').join('\n')
+        : '';
+    return safeParsePromptResult(raw, request.prompt);
+}
+
+export async function enhancePromptWithProvider(
+    request: PromptEnhanceRequest,
+    model: string,
+    key?: UserApiKey,
+): Promise<PromptEnhanceResult> {
+    const provider = inferProviderFromModel(model);
+
+    if (provider === 'google') {
+        return enhancePromptWithGemini(request, key?.key);
+    }
+
+    if (provider === 'anthropic') {
+        return enhancePromptWithAnthropic(request, model, key);
+    }
+
+    return enhancePromptWithOpenAICompatible(request, model, provider, key);
+}
+
+export async function generateImageWithProvider(
+    prompt: string,
+    model: string,
+    key?: UserApiKey,
+): Promise<{ newImageBase64: string | null; newImageMimeType: string | null; textResponse: string | null }> {
+    const provider = inferProviderFromModel(model);
+
+    if (provider === 'google') {
+        return generateImageFromText(prompt);
+    }
+
+    if (provider === 'openai' || provider === 'custom') {
+        const apiKey = requireApiKey(provider, key);
+        const baseUrl = getBaseUrl(provider, key);
+        const response = await smartFetch(provider, `${baseUrl}/images/generations`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model,
+                prompt,
+                size: '1024x1024',
+                response_format: 'b64_json',
+            }),
+        });
+
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw new Error(`${provider} image generation failed (${response.status}): ${text || response.statusText}`);
+        }
+
+        const json = await response.json();
+        return {
+            newImageBase64: json?.data?.[0]?.b64_json || null,
+            newImageMimeType: 'image/png',
+            textResponse: null,
+        };
+    }
+
+    if (provider === 'stability') {
+        const apiKey = requireApiKey('stability', key);
+        const baseUrl = getBaseUrl('stability', key);
+        const response = await smartFetch(
+            'stability',
+            `${baseUrl}/generation/stable-diffusion-xl-1024-v1-0/text-to-image`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({
+                    text_prompts: [{ text: prompt }],
+                    cfg_scale: 7,
+                    clip_guidance_preset: 'FAST_BLUE',
+                    height: 1024,
+                    width: 1024,
+                    samples: 1,
+                    steps: 30,
+                }),
+            },
+        );
+
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw new Error(`Stability image generation failed (${response.status}): ${text || response.statusText}`);
+        }
+
+        const json = await response.json();
+        return {
+            newImageBase64: json?.artifacts?.[0]?.base64 || null,
+            newImageMimeType: 'image/png',
+            textResponse: null,
+        };
+    }
+
+    throw new Error(`Image generation is not currently supported with ${provider} .`);
+}

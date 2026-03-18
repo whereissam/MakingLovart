@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { Element } from '../types';
 
@@ -14,25 +13,7 @@ interface LayerPanelProps {
     onReorder: (draggedId: string, targetId: string, position: 'before' | 'after') => void;
 }
 
-const getElementIcon = (element: Element) => {
-    switch (element.type) {
-        case 'image': return '🖼️';
-        case 'text': return '🇹';
-        case 'shape':
-            switch (element.shapeType) {
-                case 'rectangle': return '▭';
-                case 'circle': return '◯';
-                case 'triangle': return '▵';
-            }
-            break;
-        case 'group': return '📁';
-        case 'path': return '✎';
-        case 'arrow': return '→';
-        case 'line': return '—';
-        default: return '●';
-    }
-    return '●';
-};
+import { getElementIcon } from './shared/elementIcon';
 
 const LayerItem: React.FC<{
     element: Element;
@@ -42,7 +23,6 @@ const LayerItem: React.FC<{
     onToggleVisibility: () => void;
     onToggleLock: () => void;
     onRename: (name: string) => void;
-    // FIX: Changed drag handler prop types to match standard React event handlers.
     onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
     onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
     onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -62,7 +42,7 @@ const LayerItem: React.FC<{
             inputRef.current.select();
         }
     }, [isEditing]);
-    
+
     const handleBlur = () => {
         setIsEditing(false);
         if (name.trim() === '') {
@@ -72,6 +52,17 @@ const LayerItem: React.FC<{
         }
     };
 
+    const iconProps = {
+        width: 16,
+        height: 16,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '2',
+        strokeLinecap: 'round' as const,
+        strokeLinejoin: 'round' as const,
+    };
+
     return (
         <div
             draggable
@@ -79,11 +70,13 @@ const LayerItem: React.FC<{
             onClick={onSelect}
             onDoubleClick={() => setIsEditing(true)}
             className={`flex items-center space-x-2 p-1.5 rounded-md cursor-pointer text-sm transition-colors group ${
-                isSelected ? 'bg-blue-500/30' : 'hover:bg-white/10'
+                isSelected ? 'bg-neutral-900/10' : 'hover:bg-neutral-100'
             } ${element.isVisible === false ? 'opacity-50' : ''}`}
             style={{ paddingLeft: `${10 + level * 20}px` }}
         >
-            <span className="flex-shrink-0 w-4">{getElementIcon(element)}</span>
+            <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center text-gray-400">
+                {getElementIcon(element)}
+            </span>
             {isEditing ? (
                 <input
                     ref={inputRef}
@@ -92,33 +85,69 @@ const LayerItem: React.FC<{
                     onChange={(e) => setName(e.target.value)}
                     onBlur={handleBlur}
                     onKeyDown={(e) => e.key === 'Enter' && handleBlur()}
-                    className="flex-grow bg-transparent border-b border-blue-400 outline-none text-white"
-                    onClick={e => e.stopPropagation()}
+                    className="flex-grow bg-transparent border-b border-neutral-400 outline-none text-neutral-900"
+                    onClick={(e) => e.stopPropagation()}
                 />
             ) : (
                 <span className="flex-grow truncate">{name}</span>
             )}
             <div className="flex-shrink-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                    onClick={(e) => { e.stopPropagation(); onToggleLock(); }}
-                    className={`p-1 rounded-full hover:bg-white/20 ${element.isLocked ? 'text-white' : 'text-gray-500'}`}
-                    title={element.isLocked ? "Unlock" : "Lock"}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleLock();
+                    }}
+                    className={`p-1 rounded-full hover:bg-neutral-100 ${element.isLocked ? 'text-neutral-900' : 'text-neutral-400'}`}
+                    title={element.isLocked ? 'Unlock' : 'Lock'}
                 >
-                    {element.isLocked ? '🔒' : '🔓'}
+                    {element.isLocked ? (
+                        <svg {...iconProps}>
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    ) : (
+                        <svg {...iconProps}>
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                        </svg>
+                    )}
                 </button>
                 <button
-                    onClick={(e) => { e.stopPropagation(); onToggleVisibility(); }}
-                    className="p-1 rounded-full hover:bg-white/20"
-                    title={element.isVisible === false ? "Show" : "Hide"}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVisibility();
+                    }}
+                    className="p-1 rounded-full hover:bg-neutral-100 text-neutral-400"
+                    title={element.isVisible === false ? 'Show' : 'Hide'}
                 >
-                    {element.isVisible === false ? '🙈' : '👁️'}
+                    {element.isVisible === false ? (
+                        <svg {...iconProps}>
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                        </svg>
+                    ) : (
+                        <svg {...iconProps}>
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    )}
                 </button>
             </div>
         </div>
     );
 };
 
-export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, elements, selectedElementIds, onSelectElement, onToggleVisibility, onToggleLock, onRenameElement, onReorder }) => {
+export const LayerPanel: React.FC<LayerPanelProps> = ({
+    isOpen,
+    onClose,
+    elements,
+    selectedElementIds,
+    onSelectElement,
+    onToggleVisibility,
+    onToggleLock,
+    onRenameElement,
+    onReorder,
+}) => {
     const panelRef = useRef<HTMLDivElement>(null);
     const [dragOverId, setDragOverId] = useState<string | null>(null);
 
@@ -134,7 +163,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, element
         setDragOverId(id);
         target.style.background = 'rgba(255,255,255,0.2)';
     };
-    
+
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
         e.currentTarget.style.background = '';
         setDragOverId(null);
@@ -153,20 +182,25 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, element
             onReorder(draggedId, targetId, position);
         }
     };
-    
-    const elementMap = useMemo(() => new Map(elements.map(el => [el.id, el])), [elements]);
-    const rootElements = useMemo(() => elements.filter(el => !el.parentId), [elements]);
+
+    const elementMap = useMemo(() => new Map(elements.map((el) => [el.id, el])), [elements]);
+    const rootElements = useMemo(() => elements.filter((el) => !el.parentId), [elements]);
 
     const renderLayers = (elementIds: string[], level: number) => {
-        return elementIds.map(id => {
+        return elementIds.map((id) => {
             const element = elementMap.get(id);
             if (!element) return null;
 
-            const childrenIds = elements.filter(el => el.parentId === id).map(el => el.id);
+            const childrenIds = elements.filter((el) => el.parentId === id).map((el) => el.id);
 
             return (
                 <React.Fragment key={id}>
-                    <div data-id={id} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, id)}>
+                    <div
+                        data-id={id}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, id)}
+                    >
                         <LayerItem
                             element={element}
                             level={level}
@@ -174,8 +208,8 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, element
                             onSelect={() => onSelectElement(id)}
                             onToggleLock={() => onToggleLock(id)}
                             onToggleVisibility={() => onToggleVisibility(id)}
-                            onRename={name => onRenameElement(id, name)}
-                            onDragStart={e => handleDragStart(e, id)}
+                            onRename={(name) => onRenameElement(id, name)}
+                            onDragStart={(e) => handleDragStart(e, id)}
                             onDragOver={handleDragOver}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, id)}
@@ -190,10 +224,15 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, element
     // Render elements in their actual array order for Z-index representation
     const renderOrderedLayers = (elements: Element[], level: number = 0, parentId?: string) => {
         return elements
-            .filter(el => el.parentId === parentId)
-            .map(element => (
+            .filter((el) => el.parentId === parentId)
+            .map((element) => (
                 <React.Fragment key={element.id}>
-                     <div data-id={element.id} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, element.id)}>
+                    <div
+                        data-id={element.id}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, element.id)}
+                    >
                         <LayerItem
                             element={element}
                             level={level}
@@ -201,35 +240,44 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ isOpen, onClose, element
                             onSelect={() => onSelectElement(element.id)}
                             onToggleLock={() => onToggleLock(element.id)}
                             onToggleVisibility={() => onToggleVisibility(element.id)}
-                            onRename={name => onRenameElement(element.id, name)}
-                            onDragStart={e => handleDragStart(e, element.id)}
+                            onRename={(name) => onRenameElement(element.id, name)}
+                            onDragStart={(e) => handleDragStart(e, element.id)}
                             onDragOver={handleDragOver}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, element.id)}
                         />
-                     </div>
+                    </div>
                     {renderOrderedLayers(elements, level + 1, element.id)}
                 </React.Fragment>
             ));
     };
 
-
     if (!isOpen) return null;
 
     return (
-        <div 
+        <div
             ref={panelRef}
-            className="absolute top-4 right-4 z-20 flex flex-col w-64 h-[calc(100vh-2rem)] backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl text-white overflow-hidden"
+            className="absolute top-4 left-20 z-[30] flex flex-col w-64 h-[calc(100vh-2rem)] border border-neutral-200/50 rounded-2xl shadow-2xl bg-white/95 backdrop-blur-xl text-neutral-900 overflow-hidden transition-all duration-300 ease-out"
             style={{ backgroundColor: 'var(--ui-bg-color)' }}
         >
-            <div className="flex-shrink-0 flex justify-between items-center p-3 border-b border-white/10 cursor-move">
+            <div className="flex-shrink-0 flex justify-between items-center p-3 border-b border-neutral-200/50 cursor-move">
                 <h3 className="text-base font-semibold">Layers</h3>
-                <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-full">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <button onClick={onClose} className="text-neutral-400 hover:text-neutral-900 p-1 rounded-full">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
                 </button>
             </div>
-            <div className="flex-grow p-2 overflow-y-auto">
-                 {renderOrderedLayers([...elements].reverse())}
+            <div className="flex-grow p-2 overflow-y-auto">{renderOrderedLayers([...elements].reverse())}</div>
+            <div className="flex-shrink-0 p-2 border-t border-neutral-200">
+                <button
+                    onClick={onClose}
+                    className="w-full text-sm py-1.5 rounded-md bg-neutral-50 hover:bg-white border border-neutral-200 text-neutral-700"
+                    title="收起图层"
+                >
+                    收起
+                </button>
             </div>
         </div>
     );

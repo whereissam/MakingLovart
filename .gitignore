@@ -11,6 +11,13 @@ node_modules
 dist
 dist-ssr
 *.local
+.npm-cache
+bun.lock
+
+# Environment files
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
